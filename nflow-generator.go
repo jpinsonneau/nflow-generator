@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jessevdk/go-flags"
@@ -37,11 +38,11 @@ var opts struct {
 	CollectorPort string `short:"p" long:"port" description:"port number of the target netflow collector"`
 	SpikeProto    string `short:"s" long:"spike" description:"run a second thread generating a spike for the specified protocol"`
 	FalseIndex    bool   `short:"f" long:"false-index" description:"generate false SNMP interface indexes, otherwise set to 0"`
+	IPs           string `short:"i" long:"ips" description:"uses specific list of ips, comma separated"`
 	Help          bool   `short:"h" long:"help" description:"show nflow-generator help"`
 }
 
 func main() {
-
 	_, err := flags.Parse(&opts)
 	if err != nil {
 		showUsage()
@@ -66,7 +67,14 @@ func main() {
 	}
 	log.Infof("sending netflow data to a collector ip: %s and port: %s",
 		opts.CollectorIP, opts.CollectorPort)
-
+	var ips []string
+	if len(opts.IPs) > 0 {
+		ips = strings.Split(opts.IPs, ",")
+		log.Info("specified ips:")
+		for _, ip := range ips {
+			log.Infof("%s", ip)
+		}
+	}
 	for {
 		rand.Seed(time.Now().Unix())
 		n := randomNum(50, 1000)
@@ -75,14 +83,14 @@ func main() {
 			GenerateSpike()
 		}
 		if n > 900 {
-			data := GenerateNetflow(8)
+			data := GenerateNetflow(8, ips)
 			buffer := BuildNFlowPayload(data)
 			_, err := conn.Write(buffer.Bytes())
 			if err != nil {
 				log.Fatal("Error connecting to the target collector: ", err)
 			}
 		} else {
-			data := GenerateNetflow(16)
+			data := GenerateNetflow(16, ips)
 			buffer := BuildNFlowPayload(data)
 			_, err := conn.Write(buffer.Bytes())
 			if err != nil {
@@ -130,6 +138,7 @@ Application Options:
         p2p - generates udp/6681
         bittorrent - generates udp/6682
   -f, --false-index generate a false snmp index values of 1 or 2. The default is 0. (Optional)
+  -i, --ips uses specific list of ips, comma separated (Optional)
 
 Example Usage:
 
@@ -138,6 +147,9 @@ Example Usage:
 
     -generate default flows to device 172.16.86.138, port 9995
     ./nflow-generator -t 172.16.86.138 -p 9995 
+
+    -generate default flows between ips 172.16.86.1, 172.16.86.2, 172.16.86.3 to device 172.16.86.138, port 9995
+    ./nflow-generator -t 172.16.86.138 -p 9995 -i 172.16.86.1,172.16.86.2,172.16.86.3
 
     -generate default flows along with a spike in the specified protocol:
     ./nflow-generator -t 172.16.86.138 -p 9995 -s ssh
