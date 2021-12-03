@@ -7,11 +7,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/jessevdk/go-flags"
 	"math/rand"
 	"net"
 	"os"
 	"time"
+
+	"github.com/jessevdk/go-flags"
 )
 
 type Proto int
@@ -35,8 +36,8 @@ var opts struct {
 	CollectorIP   string `short:"t" long:"target" description:"target ip address of the netflow collector"`
 	CollectorPort string `short:"p" long:"port" description:"port number of the target netflow collector"`
 	SpikeProto    string `short:"s" long:"spike" description:"run a second thread generating a spike for the specified protocol"`
-    FalseIndex    bool   `short:"f" long:"false-index" description:"generate false SNMP interface indexes, otherwise set to 0"`
-    Help          bool   `short:"h" long:"help" description:"show nflow-generator help"`
+	FalseIndex    bool   `short:"f" long:"false-index" description:"generate false SNMP interface indexes, otherwise set to 0"`
+	Help          bool   `short:"h" long:"help" description:"show nflow-generator help"`
 }
 
 func main() {
@@ -63,8 +64,8 @@ func main() {
 	if err != nil {
 		log.Fatal("Error connecting to the target collector: ", err)
 	}
-	log.Infof("sending netflow data to a collector ip: %s and port: %s. \n"+
-		"Use ctrl^c to terminate the app.", opts.CollectorIP, opts.CollectorPort)
+	log.Infof("sending netflow data to a collector ip: %s and port: %s",
+		opts.CollectorIP, opts.CollectorPort)
 
 	for {
 		rand.Seed(time.Now().Unix())
