@@ -39,6 +39,16 @@ Feed it the target collector and port, and optional "false-index" flag:
 
 	./nflow-generator -t <ip> -p <port> [ -f | --false-index ]
 
+### Deploy on Kubernetes
+
+Edit file [netflow_generator.yaml](./examples/netflow_generator.yaml) `<collector_ip>` and `<collector_port>`.
+Add extra parameters if needed (ips for example)
+
+Then run:
+```bash
+kubectl apply -f examples/netflow_generator.yaml
+```
+
 ### Run a Test Collection
 
 You can run a simple test collection using nfcapd from the nfdump package with the following.
