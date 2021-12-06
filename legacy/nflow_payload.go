@@ -1,8 +1,9 @@
-package main
+package legacy
 
 import (
 	"bytes"
 	"encoding/binary"
+	"log"
 	"math/rand"
 	"net"
 	"time"
@@ -78,7 +79,7 @@ type Netflow struct {
 }
 
 //Marshall NetflowData into a buffer
-func BuildNFlowPayload(data Netflow) bytes.Buffer {
+func BuildNFlowPayload(data Netflow) []byte {
 	buffer := new(bytes.Buffer)
 	err := binary.Write(buffer, binary.BigEndian, &data.Header)
 	if err != nil {
@@ -90,13 +91,16 @@ func BuildNFlowPayload(data Netflow) bytes.Buffer {
 			log.Println("Writing netflow record failed:", err)
 		}
 	}
-	return *buffer
+	return buffer.Bytes()
 }
 
+var falseIndex = false
+
 //Generate a netflow packet w/ user-defined record count
-func GenerateNetflow(recordCount int, ips []string) Netflow {
+func GenerateNetflow(recordCount int, ips []string, fi bool) Netflow {
 	data := new(Netflow)
 	header := CreateNFlowHeader(recordCount)
+	falseIndex = fi
 	var records []NetflowPayload
 	if recordCount == 8 {
 		// overwrite payload to add some variations for traffic spikes.
@@ -567,7 +571,7 @@ func FillCommonFields(
 	payload.Padding2 = 0
 
 	// now handle computed values
-	if !opts.FalseIndex { // default interfaces are zero
+	if !falseIndex { // default interfaces are zero
 		payload.SnmpInIndex = 0
 		payload.SnmpOutIndex = 0
 	} else if payload.SrcIP > payload.DstIP { // false-index
@@ -579,8 +583,8 @@ func FillCommonFields(
 	}
 
 	uptime := int(sysUptime)
-	payload.SysUptimeEnd = uint32(uptime - randomNum(10, 500))
-	payload.SysUptimeStart = payload.SysUptimeEnd - uint32(randomNum(10, 500))
+	payload.SysUptimeEnd = uint32(uptime - RandomNum(10, 500))
+	payload.SysUptimeStart = payload.SysUptimeEnd - uint32(RandomNum(10, 500))
 
 	// log.Infof("S&D : %x %x %d, %d", payload.SrcIP, payload.DstIP, payload.DstPort, payload.SnmpInIndex)
 	// log.Infof("Time: %d %d %d", sysUptime, payload.SysUptimeStart, payload.SysUptimeEnd)
@@ -599,4 +603,8 @@ func IPtoUint32(s string) uint32 {
 
 func genRandUint32(max int) uint32 {
 	return uint32(rand.Intn(max))
+}
+
+func RandomNum(min, max int) int {
+	return rand.Intn(max-min) + min
 }
