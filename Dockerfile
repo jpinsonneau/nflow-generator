@@ -1,11 +1,13 @@
-FROM golang
+FROM registry.access.redhat.com/ubi8/go-toolset:1.16.7-5 as builder
+ARG VERSION=""
 
-MAINTAINER Brent Salisbury <brent.salisbury@gmail.com>
+WORKDIR /opt/app-root
+COPY . .
 
-ADD . /go/src/github.com/nerdalert/nflow-generator
+RUN go build -ldflags "-X main.version=${VERSION}"
 
-RUN go get github.com/Sirupsen/logrus \
-    && go get github.com/jessevdk/go-flags \
-    && go install github.com/nerdalert/nflow-generator
+FROM registry.access.redhat.com/ubi8/ubi-minimal:8.5-204
 
-ENTRYPOINT ["/go/bin/nflow-generator"]
+COPY --from=builder /opt/app-root/nflow-generator ./
+
+ENTRYPOINT ["./nflow-generator"]

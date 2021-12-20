@@ -1,21 +1,18 @@
-package main
+package legacy
 
-//import "fmt"
+import "log"
 
 //Generate a netflow packet w/ user-defined record count
-func GenerateSpike() Netflow {
+func GenerateSpike(spikeProto string) Netflow {
 	data := new(Netflow)
-	header := CreateNFlowHeader(1)
-	records := []NetflowPayload{}
-	records = spikeFlowPayload()
-	data.Header = header
-	data.Records = records
+	data.Header = CreateNFlowHeader(1)
+	data.Records = spikeFlowPayload(spikeProto)
 	return *data
 }
 
-func spikeFlowPayload() []NetflowPayload {
+func spikeFlowPayload(spikeProto string) []NetflowPayload {
 	payload := make([]NetflowPayload, 1)
-	switch opts.SpikeProto {
+	switch spikeProto {
 	case "ssh":
 		payload[0] = CreateSshFlow()
 	case "ftp":
@@ -39,7 +36,7 @@ func spikeFlowPayload() []NetflowPayload {
 	case "bittorrent":
 		payload[0] = CreateBitorrentFlow()
 	default:
-		log.Fatalf("protocol option %s is not valid, see --help for options", opts.SpikeProto)
+		log.Fatalf("protocol option %s is not valid, see --help for options", spikeProto)
 	}
 	return payload
 }
