@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jessevdk/go-flags"
+	"github.com/seancfoley/ipaddress-go/ipaddr"
 )
 
 type Proto int
@@ -33,59 +32,106 @@ const (
 )
 
 var opts struct {
-	CollectorIP   string `short:"t" long:"target" description:"target ip address of the netflow collector"`
+	CollectorIPs  string `short:"t" long:"targets" description:"target ip address(es) the netflow collector(s), comma separated"`
 	CollectorPort string `short:"p" long:"port" description:"port number of the target netflow collector"`
-	SpikeProto    string `short:"s" long:"spike" description:"run a second thread generating a spike for the specified protocol"`
-	FalseIndex    bool   `short:"f" long:"false-index" description:"generate false SNMP interface indexes, otherwise set to 0"`
+	SpikeProto    string `long:"spike" description:"run a second thread generating a spike for the specified protocol"`
+	FalseIndex    bool   `long:"false-index" description:"generate false SNMP interface indexes, otherwise set to 0"`
 	IPs           string `short:"i" long:"ips" description:"use specific list of ips, comma separated"`
 	V10           bool   `short:"v" long:"ipfix" description:"use ipfix version (10)"`
+	Sleep         bool   `short:"s" long:"sleep" description:"enable random sleep time"`
+	MinSleep      int    `long:"minsleep" description:"min sleep time"`
+	MaxSleep      int    `long:"maxsleep" description:"max sleep time"`
+	Concurrency   int    `long:"concurrency" description:"number of threads to run in parallel"`
 	Help          bool   `short:"h" long:"help" description:"show nflow-generator help"`
 }
 
+var start time.Time
+var ips []string
+var udpAddrs []*net.UDPAddr
+var loopCount float64 = 0
+
 func main() {
 	_, err := flags.Parse(&opts)
+
 	if err != nil {
 		showUsage()
 		os.Exit(1)
 	}
-	if opts.Help == true {
+
+	if opts.Help {
 		showUsage()
 		os.Exit(1)
 	}
-	if opts.CollectorIP == "" || opts.CollectorPort == "" {
+
+	if opts.CollectorIPs == "" || opts.CollectorPort == "" {
 		showUsage()
 		os.Exit(1)
 	}
-	collector := opts.CollectorIP + ":" + opts.CollectorPort
-	udpAddr, err := net.ResolveUDPAddr("udp", collector)
-	if err != nil {
-		log.Fatal(err)
+
+	if opts.MinSleep == 0 {
+		opts.MinSleep = 50
 	}
-	conn, err := net.DialUDP("udp", nil, udpAddr)
+
+	if opts.MaxSleep == 0 {
+		opts.MaxSleep = 1000
+	}
+
+	splittedCollectorIPsString := strings.Split(opts.CollectorIPs, ",")
+	for _, ip := range splittedCollectorIPsString {
+		collector := ip + ":" + opts.CollectorPort
+		log.Infof("checking collector: %s", collector)
+
+		udpAddr, err := net.ResolveUDPAddr("udp", collector)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		udpAddrs = append(udpAddrs, udpAddr)
+	}
+
+	if len(opts.IPs) > 0 {
+		splittedIPsString := strings.Split(opts.IPs, ",")
+		log.Info("specified ips:")
+		for _, ip := range splittedIPsString {
+			block := ipaddr.NewIPAddressString(ip).GetAddress()
+			for i := block.Iterator(); i.HasNext(); {
+				ip := i.Next().GetNetIPAddr().String()
+				ips = append(ips, ip)
+				log.Infof("%s", ip)
+			}
+		}
+	}
+
+	if opts.Concurrency == 0 {
+		opts.Concurrency = 1
+	}
+
+	start = time.Now()
+	rand.Seed(start.Unix())
+	for i := 0; i < opts.Concurrency; i++ {
+		go loopFlows()
+	}
+
+	loopRate()
+}
+
+func loopFlows() {
+	i := rand.Int() % len(udpAddrs)
+
+	log.Infof("sending netflow data to collector %s:%d using %d threads",
+		udpAddrs[i].IP, udpAddrs[i].Port, opts.Concurrency)
+
+	conn, err := net.DialUDP("udp", nil, udpAddrs[i])
 	if err != nil {
 		log.Fatal("Error connecting to the target collector: ", err)
-	}
-	log.Infof("sending netflow data to a collector ip: %s and port: %s",
-		opts.CollectorIP, opts.CollectorPort)
-
-	var ips []string
-	if len(opts.IPs) > 0 {
-		ips = strings.Split(opts.IPs, ",")
-		log.Info("specified ips:")
-		for _, ip := range ips {
-			log.Infof("%s", ip)
-		}
 	}
 
 	var byteArray []byte
 	for {
-		rand.Seed(time.Now().Unix())
-		n := leg.RandomNum(50, 1000)
+		n := leg.RandomNum(opts.MinSleep, opts.MaxSleep)
 
 		if opts.V10 {
 			msg := ipfix.GenerateNetflow(ips)
-			js, _ := json.Marshal(msg)
-			fmt.Println(bytes.NewBuffer(js).String())
 			byteArray = ipfix.Encode(*msg, ipfix.GetSeqNum())
 		} else {
 			// add spike data
@@ -99,25 +145,38 @@ func main() {
 			data := leg.GenerateNetflow(recordCount, ips, opts.FalseIndex)
 			byteArray = leg.BuildNFlowPayload(data)
 		}
-		fmt.Println(byteArray)
 		_, err := conn.Write(byteArray)
 		if err != nil {
 			log.Fatal("Error connecting to the target collector: ", err)
 		}
 
-		// add some periodic spike data
-		if n < 150 {
-			sleepInt := time.Duration(3000)
+		if opts.Sleep {
+			// add some periodic spike data
+			if n < 150 {
+				sleepInt := time.Duration(3000)
+				time.Sleep(sleepInt * time.Millisecond)
+			}
+			sleepInt := time.Duration(n)
 			time.Sleep(sleepInt * time.Millisecond)
 		}
-		sleepInt := time.Duration(n)
-		time.Sleep(sleepInt * time.Millisecond)
+
+		loopCount++
+	}
+}
+
+func loopRate() {
+	for {
+		time.Sleep(10 * time.Second)
+
+		now := time.Now()
+		diff := now.Sub(start).Seconds()
+		rate := loopCount / diff
+		log.Infof("Current rate is: %f calls per seconds", rate)
 	}
 }
 
 func showUsage() {
-	var usage string
-	usage = `
+	usage := `
 Usage:
   main [OPTIONS] [collector IP address] [collector port number]
 
@@ -125,9 +184,9 @@ Usage:
   Time stamps in all datagrams are set to UTC.
 
 Application Options:
-  -t, --target= target ip address of the netflow collector
+  -t, --targets= target ip address(es) the netflow collector(s), comma separated
   -p, --port=   port number of the target netflow collector
-  -s, --spike run a second thread generating a spike for the specified protocol
+  --spike run a second thread generating a spike for the specified protocol
     protocol options are as follows:
         ftp - generates tcp/21
         ssh  - generates tcp/22
@@ -141,9 +200,11 @@ Application Options:
         https_alt - generates tcp/8080
         p2p - generates udp/6681
         bittorrent - generates udp/6682
-  -f, --false-index generate a false snmp index values of 1 or 2. The default is 0. (Optional)
+  --false-index generate a false snmp index values of 1 or 2. The default is 0. (Optional)
   -i, --ips use specific list of ips, comma separated (Optional)
   -v, --ipfix use ipfix version (10)
+  -s, --sleep enable random sleep time
+	--concurrency number of threads to run in parallel
 
 Example Usage:
 
