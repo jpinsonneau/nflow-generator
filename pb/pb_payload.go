@@ -61,7 +61,7 @@ func GenerateRecords(ips []string) []*pbflow.Record {
 			Protocol: 1,
 			//Protocol: uint32(rand.Int() % 255),
 		},
-		Bytes:     rand.Uint64(),
+		Bytes:     uint64(getRandInt(1500, 9000)),
 		Packets:   1,
 		Interface: "fake nflow-generator record",
 	}
@@ -74,4 +74,8 @@ func ip2Long(ip net.IP) uint32 {
 	var long uint32
 	binary.Read(bytes.NewBuffer(ip), binary.BigEndian, &long)
 	return long
+}
+
+func getRandInt(min, max int) int {
+	return rand.Intn(max-min+1) + min
 }

@@ -7,5 +7,5 @@ require (
 	github.com/netobserv/netobserv-ebpf-agent v0.1.3
 	github.com/seancfoley/ipaddress-go v1.2.0
 	github.com/sirupsen/logrus v1.8.1
-	google.golang.org/protobuf v1.28.0
+	google.golang.org/protobuf v1.28.1
 )

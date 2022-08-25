@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jessevdk/go-flags"
+	"github.com/netobserv/netobserv-ebpf-agent/pkg/grpc"
 	"github.com/netobserv/netobserv-ebpf-agent/pkg/pbflow"
 	"github.com/seancfoley/ipaddress-go/ipaddr"
 )
@@ -35,7 +38,7 @@ const (
 
 var opts struct {
 	CollectorIPs  string `short:"t" long:"targets" description:"target ip address(es) the netflow collector(s), comma separated"`
-	CollectorPort string `short:"p" long:"port" description:"port number of the target netflow collector"`
+	CollectorPort string `short:"p" long:"port" description:"port number of the target netflow collector. Default 2055"`
 	SpikeProto    string `long:"spike" description:"run a second thread generating a spike for the specified protocol"`
 	FalseIndex    bool   `long:"false-index" description:"generate false SNMP interface indexes, otherwise set to 0"`
 	IPs           string `short:"i" long:"ips" description:"use specific list of ips, comma separated"`
@@ -48,12 +51,13 @@ var opts struct {
 	Help          bool   `short:"h" long:"help" description:"show nflow-generator help"`
 }
 
+var err error
 var ips []string
 var collectorAddrs []*net.IPAddr
 var loopCount float64 = 0
 
 func main() {
-	_, err := flags.Parse(&opts)
+	_, err = flags.Parse(&opts)
 
 	if err != nil {
 		showUsage()
@@ -65,9 +69,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	if opts.CollectorIPs == "" || opts.CollectorPort == "" {
+	if opts.CollectorIPs == "" {
 		showUsage()
 		os.Exit(1)
+	}
+
+	if opts.CollectorPort == "" {
+		opts.CollectorPort = "2055"
 	}
 
 	if opts.MinSleep == 0 {
@@ -111,7 +119,7 @@ func main() {
 		opts.Concurrency = 1
 	}
 
-	rand.Seed(time.Now().Unix())
+	rand.Seed(time.Now().UnixNano())
 	for i := 0; i < opts.Concurrency; i++ {
 		go loopFlows()
 	}
@@ -122,7 +130,8 @@ func main() {
 func loopFlows() {
 	i := rand.Int() % len(collectorAddrs)
 
-	var flowCh chan []*pbflow.Record
+	var grpcConn *grpc.ClientConnection
+	var flows []*pbflow.Record
 
 	var udpConn *net.UDPConn
 	var byteArray []byte
@@ -131,13 +140,10 @@ func loopFlows() {
 	if opts.Type == "pb" {
 		log.Infof("checking grpc target %s ...", target)
 
-		grpcExporter, err := pb.StartGRPCProto(target)
+		grpcConn, err = grpc.ConnectClient(target)
 		if err != nil {
 			log.Fatal("Error resolving grpcExporter: ", err)
 		}
-		flowCh = make(chan []*pbflow.Record)
-		go grpcExporter.ExportFlows(flowCh)
-
 		log.Infof("grpc target %s ok !", target)
 	} else {
 		log.Infof("checking udp target %s ...", target)
@@ -162,7 +168,7 @@ func loopFlows() {
 			msg := ipfix.GenerateNetflow(ips)
 			byteArray = ipfix.Encode(*msg, ipfix.GetSeqNum())
 		case "pb":
-			flowCh <- pb.GenerateRecords(ips)
+			flows = pb.GenerateRecords(ips)
 		default:
 			// add spike data
 			if opts.SpikeProto != "" {
@@ -176,11 +182,18 @@ func loopFlows() {
 			byteArray = legacy.BuildNFlowPayload(data)
 		}
 
-		if opts.Type != "pb" {
-			_, err := udpConn.Write(byteArray)
-			if err != nil {
-				log.Fatal("Error connecting to the target collector: ", err)
-			}
+		if grpcConn != nil {
+			_, err = grpcConn.Client().Send(context.TODO(), &pbflow.Records{
+				Entries: flows,
+			})
+		} else if udpConn != nil {
+			_, err = udpConn.Write(byteArray)
+		} else {
+			err = errors.New("either grpc or udp connection should be set")
+		}
+
+		if err != nil {
+			log.Fatal("Error connecting to the target collector: ", err)
 		}
 
 		if opts.Sleep {
@@ -218,7 +231,7 @@ Usage:
 
 Application Options:
   -t, --targets= target ip address(es) the netflow collector(s), comma separated
-  -p, --port=   port number of the target netflow collector
+  -p, --port=   port number of the target netflow collector. Default 2055
   --spike run a second thread generating a spike for the specified protocol
     protocol options are as follows:
         ftp - generates tcp/21
