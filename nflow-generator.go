@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
-	ipfix "nflow-generator/ipfix"
-	leg "nflow-generator/legacy"
+	"nflow-generator/ipfix"
+	"nflow-generator/legacy"
+	"nflow-generator/pb"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/jessevdk/go-flags"
+	"github.com/netobserv/netobserv-ebpf-agent/pkg/pbflow"
 	"github.com/seancfoley/ipaddress-go/ipaddr"
 )
 
@@ -37,7 +39,7 @@ var opts struct {
 	SpikeProto    string `long:"spike" description:"run a second thread generating a spike for the specified protocol"`
 	FalseIndex    bool   `long:"false-index" description:"generate false SNMP interface indexes, otherwise set to 0"`
 	IPs           string `short:"i" long:"ips" description:"use specific list of ips, comma separated"`
-	V10           bool   `short:"v" long:"ipfix" description:"use ipfix version (10)"`
+	Type          string `long:"type" description:"use 'legacy' for netflow v5, 'ipfix' for v10 or 'pb' for fake ebpf agent. Default is legacy"`
 	Sleep         bool   `short:"s" long:"sleep" description:"enable random sleep time"`
 	MinSleep      int    `long:"minsleep" description:"min sleep time"`
 	MaxSleep      int    `long:"maxsleep" description:"max sleep time"`
@@ -47,7 +49,7 @@ var opts struct {
 
 var start time.Time
 var ips []string
-var udpAddrs []*net.UDPAddr
+var collectorAddrs []*net.IPAddr
 var loopCount float64 = 0
 
 func main() {
@@ -78,15 +80,14 @@ func main() {
 
 	splittedCollectorIPsString := strings.Split(opts.CollectorIPs, ",")
 	for _, ip := range splittedCollectorIPsString {
-		collector := ip + ":" + opts.CollectorPort
-		log.Infof("checking collector: %s", collector)
+		log.Infof("checking collector: %s", ip)
 
-		udpAddr, err := net.ResolveUDPAddr("udp", collector)
+		collectorAddr, err := net.ResolveIPAddr("ip", ip)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		udpAddrs = append(udpAddrs, udpAddr)
+		collectorAddrs = append(collectorAddrs, collectorAddr)
 	}
 
 	if len(opts.IPs) > 0 {
@@ -116,38 +117,67 @@ func main() {
 }
 
 func loopFlows() {
-	i := rand.Int() % len(udpAddrs)
+	i := rand.Int() % len(collectorAddrs)
 
-	log.Infof("sending netflow data to collector %s:%d using %d threads",
-		udpAddrs[i].IP, udpAddrs[i].Port, opts.Concurrency)
+	var flowCh chan []*pbflow.Record
 
-	conn, err := net.DialUDP("udp", nil, udpAddrs[i])
-	if err != nil {
-		log.Fatal("Error connecting to the target collector: ", err)
+	var udpConn *net.UDPConn
+	var byteArray []byte
+
+	target := fmt.Sprintf("%s:%s", collectorAddrs[i].IP.String(), opts.CollectorPort)
+	if opts.Type == "pb" {
+		log.Infof("checking grpc target %s ...", target)
+
+		grpcExporter, err := pb.StartGRPCProto(target)
+		if err != nil {
+			log.Fatal("Error resolving grpcExporter: ", err)
+		}
+		flowCh = make(chan []*pbflow.Record)
+		go grpcExporter.ExportFlows(flowCh)
+
+		log.Infof("grpc target %s ok !", target)
+	} else {
+		log.Infof("checking udp target %s ...", target)
+
+		addr, err := net.ResolveUDPAddr("udp", target)
+		if err != nil {
+			log.Fatal("Error resolving udp address: ", err)
+		}
+		udpConn, err = net.DialUDP("udp", nil, addr)
+		if err != nil {
+			log.Fatal("Error dialing udp address: ", err)
+		}
+
+		log.Infof("udp target %s ok !", target)
 	}
 
-	var byteArray []byte
 	for {
-		n := leg.RandomNum(opts.MinSleep, opts.MaxSleep)
+		n := legacy.RandomNum(opts.MinSleep, opts.MaxSleep)
 
-		if opts.V10 {
+		switch opts.Type {
+		case "ipfix":
 			msg := ipfix.GenerateNetflow(ips)
 			byteArray = ipfix.Encode(*msg, ipfix.GetSeqNum())
-		} else {
+		case "pb":
+			flowCh <- pb.GenerateRecords(ips)
+		default:
 			// add spike data
 			if opts.SpikeProto != "" {
-				leg.GenerateSpike(opts.SpikeProto)
+				legacy.GenerateSpike(opts.SpikeProto)
 			}
 			recordCount := 16
 			if n > 900 {
 				recordCount = 8
 			}
-			data := leg.GenerateNetflow(recordCount, ips, opts.FalseIndex)
-			byteArray = leg.BuildNFlowPayload(data)
+			data := legacy.GenerateNetflow(recordCount, ips, opts.FalseIndex)
+			byteArray = legacy.BuildNFlowPayload(data)
 		}
-		_, err := conn.Write(byteArray)
-		if err != nil {
-			log.Fatal("Error connecting to the target collector: ", err)
+
+		if opts.Type != "pb" {
+			_, err := udpConn.Write(byteArray)
+			if err != nil {
+				log.Fatal("Error connecting to the target collector: ", err)
+			}
 		}
 
 		if opts.Sleep {
@@ -202,7 +232,7 @@ Application Options:
         bittorrent - generates udp/6682
   --false-index generate a false snmp index values of 1 or 2. The default is 0. (Optional)
   -i, --ips use specific list of ips, comma separated (Optional)
-  -v, --ipfix use ipfix version (10)
+  --type use 'legacy' for netflow v5, 'ipfix' for v10 or 'pb' for fake ebpf agent. Default is legacy
   -s, --sleep enable random sleep time
 	--concurrency number of threads to run in parallel
 
