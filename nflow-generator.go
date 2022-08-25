@@ -41,13 +41,13 @@ var opts struct {
 	IPs           string `short:"i" long:"ips" description:"use specific list of ips, comma separated"`
 	Type          string `long:"type" description:"use 'legacy' for netflow v5, 'ipfix' for v10 or 'pb' for fake ebpf agent. Default is legacy"`
 	Sleep         bool   `short:"s" long:"sleep" description:"enable random sleep time"`
-	MinSleep      int    `long:"minsleep" description:"min sleep time"`
-	MaxSleep      int    `long:"maxsleep" description:"max sleep time"`
+	MinSleep      int    `long:"minsleep" description:"min sleep time. Default: 50"`
+	MaxSleep      int    `long:"maxsleep" description:"max sleep time. Default: 1000"`
+	RateSleep     int    `long:"ratesleep" description:"sleep time between each rate log. Default: 10"`
 	Concurrency   int    `long:"concurrency" description:"number of threads to run in parallel"`
 	Help          bool   `short:"h" long:"help" description:"show nflow-generator help"`
 }
 
-var start time.Time
 var ips []string
 var collectorAddrs []*net.IPAddr
 var loopCount float64 = 0
@@ -76,6 +76,10 @@ func main() {
 
 	if opts.MaxSleep == 0 {
 		opts.MaxSleep = 1000
+	}
+
+	if opts.RateSleep == 0 {
+		opts.RateSleep = 10
 	}
 
 	splittedCollectorIPsString := strings.Split(opts.CollectorIPs, ",")
@@ -107,8 +111,7 @@ func main() {
 		opts.Concurrency = 1
 	}
 
-	start = time.Now()
-	rand.Seed(start.Unix())
+	rand.Seed(time.Now().Unix())
 	for i := 0; i < opts.Concurrency; i++ {
 		go loopFlows()
 	}
@@ -196,12 +199,12 @@ func loopFlows() {
 
 func loopRate() {
 	for {
-		time.Sleep(10 * time.Second)
+		loopCount = 0
 
-		now := time.Now()
-		diff := now.Sub(start).Seconds()
-		rate := loopCount / diff
-		log.Infof("Current rate is: %f calls per seconds", rate)
+		time.Sleep(time.Duration(opts.RateSleep) * time.Second)
+
+		rate := loopCount / float64(opts.RateSleep)
+		log.Infof("Current rate is: %.1f calls per seconds", rate)
 	}
 }
 
@@ -234,6 +237,9 @@ Application Options:
   -i, --ips use specific list of ips, comma separated (Optional)
   --type use 'legacy' for netflow v5, 'ipfix' for v10 or 'pb' for fake ebpf agent. Default is legacy
   -s, --sleep enable random sleep time
+	--minsleep min sleep time. Default: 50
+	--maxsleep max sleep time. Default: 1000
+	--ratesleep sleep time between each rate log. Default: 10
 	--concurrency number of threads to run in parallel
 
 Example Usage:
