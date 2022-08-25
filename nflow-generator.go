@@ -38,7 +38,7 @@ const (
 
 var opts struct {
 	CollectorIPs  string `short:"t" long:"targets" description:"target ip address(es) the netflow collector(s), comma separated"`
-	CollectorPort string `short:"p" long:"port" description:"port number of the target netflow collector. Default 2055"`
+	CollectorPort int    `short:"p" long:"port" description:"port number of the target netflow collector. Default 2055"`
 	SpikeProto    string `long:"spike" description:"run a second thread generating a spike for the specified protocol"`
 	FalseIndex    bool   `long:"false-index" description:"generate false SNMP interface indexes, otherwise set to 0"`
 	IPs           string `short:"i" long:"ips" description:"use specific list of ips, comma separated"`
@@ -53,7 +53,7 @@ var opts struct {
 
 var err error
 var ips []string
-var collectorAddrs []*net.IPAddr
+var collectorAddrs []*net.UDPAddr
 var loopCount float64 = 0
 
 func main() {
@@ -74,8 +74,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if opts.CollectorPort == "" {
-		opts.CollectorPort = "2055"
+	if opts.CollectorPort == 0 {
+		opts.CollectorPort = 2055
 	}
 
 	if opts.MinSleep == 0 {
@@ -92,9 +92,13 @@ func main() {
 
 	splittedCollectorIPsString := strings.Split(opts.CollectorIPs, ",")
 	for _, ip := range splittedCollectorIPsString {
+		if !strings.Contains(ip, ":") {
+			ip = fmt.Sprintf("%s:%d", ip, opts.CollectorPort)
+		}
+
 		log.Infof("checking collector: %s", ip)
 
-		collectorAddr, err := net.ResolveIPAddr("ip", ip)
+		collectorAddr, err := net.ResolveUDPAddr("udp", ip)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -136,7 +140,7 @@ func loopFlows() {
 	var udpConn *net.UDPConn
 	var byteArray []byte
 
-	target := fmt.Sprintf("%s:%s", collectorAddrs[i].IP.String(), opts.CollectorPort)
+	target := fmt.Sprintf("%s:%d", collectorAddrs[i].IP.String(), collectorAddrs[i].Port)
 	if opts.Type == "pb" {
 		log.Infof("checking grpc target %s ...", target)
 
@@ -156,7 +160,6 @@ func loopFlows() {
 		if err != nil {
 			log.Fatal("Error dialing udp address: ", err)
 		}
-
 		log.Infof("udp target %s ok !", target)
 	}
 
