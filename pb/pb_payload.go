@@ -58,10 +58,9 @@ func GenerateRecords(ips []string) []*pbflow.Record {
 		Transport: &pbflow.Transport{
 			SrcPort:  uint32(rand.Int() % 9999),
 			DstPort:  uint32(rand.Int() % 9999),
-			Protocol: 1,
-			//Protocol: uint32(rand.Int() % 255),
+			Protocol: uint32(rand.Int() % 255),
 		},
-		Bytes:     uint64(getRandInt(1500, 9000)),
+		Bytes:     uint64(getRandInt(1, 9000)),
 		Packets:   1,
 		Interface: "fake nflow-generator record",
 	}
